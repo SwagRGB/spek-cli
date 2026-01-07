@@ -1,8 +1,9 @@
 use anyhow::Result;
 use rustfft::{FftPlanner, num_complex::Complex};
 use image::{RgbImage, Rgb};
-use crate::config::ColorStop;
-use crate::config::Config;
+use crate::config::{ColorStop, Config};
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 
 pub fn generate_spectrogram(
     samples: &[f32],
@@ -11,97 +12,149 @@ pub fn generate_spectrogram(
     height: u32,
     config: &Config,
 ) -> Result<RgbImage> {
-    let window_size = 2048; 
+    let window_size = 2048;
+    let overlap = 0.75; // 75% overlap
+    let hop_size = (window_size as f32 * (1.0 - overlap)) as usize;
     
     if samples.len() < window_size {
-         return Err(anyhow::anyhow!("File too short"));
+         return Err(anyhow::anyhow!("File too short (need at least {} samples)", window_size));
     }
 
-    let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(window_size);
+    // Step 1: Compute STFT
+    println!("Computing STFT...");
+    let stft_result = compute_stft(samples, window_size, hop_size)?;
+    
+    // Step 2: Render to image
+    println!("Rendering spectrogram...");
+    let img = render_spectrogram(&stft_result, width, height, config)?;
+    
+    Ok(img)
+}
 
+struct StftResult {
+    // 2D array: time_frames x frequency_bins
+    magnitudes: Vec<Vec<f32>>,
+    num_time_frames: usize,
+    num_freq_bins: usize,
+}
+
+fn compute_stft(samples: &[f32], window_size: usize, hop_size: usize) -> Result<StftResult> {
+    let num_time_frames = (samples.len() - window_size) / hop_size + 1;
+    let num_freq_bins = window_size / 2;
+    
     // Prepare window function (Hann)
     let window: Vec<f32> = (0..window_size)
         .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size as f32 - 1.0)).cos()))
         .collect();
 
+    // Setup progress bar
+    let pb = ProgressBar::new(num_time_frames as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} frames ({percent}%, {eta})")
+            .unwrap()
+            .progress_chars("#>-")
+    );
+    pb.set_message("STFT");
+
+    // Prepare FFT planner (thread-local for parallel processing)
+    let magnitudes: Vec<Vec<f32>> = (0..num_time_frames)
+        .into_par_iter()
+        .map(|frame_idx| {
+            let start = frame_idx * hop_size;
+            let end = start + window_size;
+            
+            // Create FFT for this thread
+            let mut planner = FftPlanner::new();
+            let fft = planner.plan_fft_forward(window_size);
+            
+            // Apply window and prepare FFT input
+            let mut buffer: Vec<Complex<f32>> = samples[start..end]
+                .iter()
+                .zip(window.iter())
+                .map(|(&s, &w)| Complex { re: s * w, im: 0.0 })
+                .collect();
+            
+            // Compute FFT
+            fft.process(&mut buffer);
+            
+            // Extract magnitudes (only first half, up to Nyquist)
+            let frame_mags: Vec<f32> = buffer[0..num_freq_bins]
+                .iter()
+                .map(|c| c.norm())
+                .collect();
+            
+            // Update progress (note: this is approximate in parallel)
+            if frame_idx % 10 == 0 {
+                pb.inc(10);
+            }
+            
+            frame_mags
+        })
+        .collect();
+
+    pb.finish_with_message("STFT complete");
+
+    Ok(StftResult {
+        magnitudes,
+        num_time_frames,
+        num_freq_bins,
+    })
+}
+
+fn render_spectrogram(
+    stft: &StftResult,
+    width: u32,
+    height: u32,
+    config: &Config,
+) -> Result<RgbImage> {
     let mut img = RgbImage::new(width, height);
-    
     let gradient = create_gradient_map(&config.colors.stops, 1024);
-
-    let spectrum_len = window_size / 2;
-    // Pre-allocate buffer for reuse if we were iterating differently, but here we do per-column.
     
-    // We iterate over the image width (pixels)
+    // Setup progress bar
+    let pb = ProgressBar::new(width as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} columns ({percent}%)")
+            .unwrap()
+            .progress_chars("#>-")
+    );
+    pb.set_message("Rendering");
+
+    // Resample STFT to image dimensions
     for x in 0..width {
-        // Calculate the center sample index for this pixel column
-        let center_sample = (x as f64 / width as f64 * samples.len() as f64) as usize;
+        // Map pixel x to time frame
+        let time_pos = (x as f32 / width as f32) * stft.num_time_frames as f32;
+        let frame_idx = time_pos.floor() as usize;
+        let frame_idx = frame_idx.min(stft.num_time_frames - 1);
         
-        let start_idx = if center_sample < window_size / 2 { 0 } else { center_sample - window_size / 2 };
-        let end_idx = start_idx + window_size;
-        
-        if end_idx > samples.len() {
-             break; 
-        }
-
-        let mut buffer: Vec<Complex<f32>> = samples[start_idx..end_idx]
-            .iter()
-            .zip(window.iter())
-            .map(|(&s, &w)| Complex { re: s * w, im: 0.0 })
-            .collect();
-        
-        if buffer.len() < window_size {
-             buffer.resize(window_size, Complex { re: 0.0, im: 0.0 });
-        }
-
-        fft.process(&mut buffer);
-
-        // Process this column
-        // We have `spectrum_len` bins (0 to Nyquist).
-        // We need to map to `height` pixels.
+        let frame_mags = &stft.magnitudes[frame_idx];
         
         for y in 0..height {
-            // y=0 is top (High Freq), y=height-1 is bottom (Low Freq).
-            // Let's invert y to get low->high (0..height).
+            // y=0 is top (high freq), y=height-1 is bottom (low freq)
             let y_inverted = height - 1 - y;
             
-            // Determine frequency range for this pixel
-            // Each pixel covers a range of bins.
-            let bin_start_f = (y_inverted as f32 / height as f32) * spectrum_len as f32;
-            let bin_end_f = ((y_inverted + 1) as f32 / height as f32) * spectrum_len as f32;
+            // Map pixel y to frequency bin
+            let freq_pos = (y_inverted as f32 / height as f32) * stft.num_freq_bins as f32;
             
-            let bin_start = bin_start_f.floor() as usize;
-            let bin_end = bin_end_f.ceil() as usize;
+            // Use bilinear interpolation or max for better quality
+            let bin_start = freq_pos.floor() as usize;
+            let bin_end = (freq_pos.ceil() as usize).min(stft.num_freq_bins - 1);
             
-            // To avoid missing peaks when scaling down (height < spectrum_len), we take the MAX magnitude in the range.
-            // If scaling up (height > spectrum_len), bin_start might equal bin_end or be close.
+            // Take max magnitude in range to avoid missing peaks
+            let max_mag = if bin_start == bin_end {
+                frame_mags[bin_start]
+            } else {
+                frame_mags[bin_start].max(frame_mags[bin_end])
+            };
             
-            let effective_end = bin_end.max(bin_start + 1).min(spectrum_len);
-            let effective_start = bin_start.min(effective_end - 1);
-            
-            let mut max_mag: f32 = 0.0;
-            
-            for i in effective_start..effective_end {
-                let c = buffer[i];
-                let mag = c.norm(); // equivalent to sqrt(re^2 + im^2)
-                if mag > max_mag {
-                    max_mag = mag;
-                }
-            }
-
-            // Normalize
-            // Max theoretical magnitude for Hann window of size N on sine wave is N/2 * 0.5 = N/4?
-            // Actually sum of window is N/2. 
-            // Let's normalize by window_size/2 roughly.
-            let normalized_mag = max_mag / (window_size as f32 / 2.0);
-            
-            // dB
+            // Convert to dB
+            let normalized_mag = max_mag / (stft.num_freq_bins as f32 / 2.0);
             let db = 20.0 * (normalized_mag + 1e-9).log10();
             
-            // Clamp and map
-            let min_db = -100.0; // Noise floor
-            let max_db = 0.0;    // Peak
-            
+            // Map dB to color
+            let min_db = -100.0;
+            let max_db = 0.0;
             let normalized_val = (db - min_db) / (max_db - min_db);
             let clamped = normalized_val.max(0.0).min(1.0);
             
@@ -110,7 +163,13 @@ pub fn generate_spectrogram(
             
             img.put_pixel(x, y, pixel);
         }
+        
+        if x % 10 == 0 {
+            pb.inc(10);
+        }
     }
+
+    pb.finish_with_message("Render complete");
 
     Ok(img)
 }
