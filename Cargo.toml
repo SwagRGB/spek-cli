@@ -17,3 +17,6 @@ imageproc = "0.23"
 ab_glyph = "0.2"
 anyhow = "1.0"
 rusttype = "0.9.3"
+indicatif = "0.17"
+rayon = "1.8"
+
