@@ -42,7 +42,7 @@ Ensure you have `cargo` installed (usually via `rustup` or your package manager)
 
 Basic usage:
 ```bash
-spek path/to/audio.flac
+spek-cli path/to/audio.flac
 ```
 
 Options:
