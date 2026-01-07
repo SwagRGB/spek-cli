@@ -23,7 +23,7 @@ A terminal-based acoustic spectrum analyzer (spectrogram) viewer, written in Rus
 
 2.  **Clone and Build**:
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/SwagRGB/spek-cli
     cd spek-cli
     cargo build --release
     ```
