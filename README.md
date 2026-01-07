@@ -2,7 +2,7 @@
 
 A terminal-based acoustic spectrum analyzer (spectrogram) viewer, written in Rust. Designed for checking audio quality (identifying "fake" lossless files) directly from your terminal.
 
-![Spectrogram Example](https://example.com/screenshot.png) *<!-- Replace with actual screenshot if available -->*
+![Spectrogram Example](https://upload.wikimedia.org/wikipedia/commons/c/c5/Spectrogram-19thC.png)
 
 ## Features
 
