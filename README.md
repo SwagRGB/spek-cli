@@ -6,7 +6,7 @@ A terminal-based acoustic spectrum analyzer (spectrogram) viewer, written in Rus
 
 ## Features
 
-*   **High-Resolution Spectrograms**: Uses proper FFT (not blocky ASCII) to visualize audio frequencies.
+*   **High-Resolution Spectrograms**: Uses proper STFT (not blocky ASCII) to visualize audio frequencies.
 *   **Terminal Graphics**: Supports high-quality image rendering in compatible terminals (Kitty, iTerm2, Sixel) via `viuer`.
 *   **Broad Format Support**: Supports FLAC, ALAC, WAV, MP3, and more (powered by `symphonia`).
 *   **Customizable**: Configurable color palettes and fonts.
