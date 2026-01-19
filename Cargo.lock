@@ -801,6 +801,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "owo-colors"
+version = "4.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c6901729fa79e91a0913333229e9ca5dc725089d1c363b2f4b4760709dc4a52"
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1159,7 +1165,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "spek-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -1169,6 +1175,7 @@ dependencies = [
  "image",
  "imageproc",
  "indicatif",
+ "owo-colors",
  "rayon",
  "rustfft",
  "rusttype",
